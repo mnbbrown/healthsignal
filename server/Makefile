@@ -10,7 +10,7 @@ K := $(foreach exec,$(EXECUTABLES),\
 
 ROOT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
-BINARY=healthsignal-client
+BINARY=healthsignal-server
 VERSION=1.0.1
 BUILD=`git rev-parse HEAD`
 PLATFORMS=darwin linux windows
@@ -21,7 +21,7 @@ LDFLAGS=-ldflags "-X main.Version=${VERSION} -X main.Build=${BUILD}"
 
 default: build
 
-all: clean build_all install
+all: clean build_all
 
 build:
 	go build ${LDFLAGS} -o ${BINARY}
