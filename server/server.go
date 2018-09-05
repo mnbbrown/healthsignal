@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	influxdb "github.com/influxdata/influxdb/client/v2"
@@ -9,12 +10,14 @@ import (
 	"google.golang.org/grpc"
 	"log"
 	"net"
+	"net/http"
 	"strconv"
 	"time"
 )
 
 var (
-	port = flag.Int("port", 10000, "HealthSignal API Port")
+	port    = flag.Int("port", 10000, "HealthSignal API Port")
+	webport = flag.Int("webport", 8080, "HealthSignal Web API Port")
 )
 
 type healthSignalServer struct {
@@ -46,7 +49,6 @@ func (h *healthSignalServer) startSink() {
 			log.Println("Here")
 			pings = append(pings, ping)
 		case <-ticker.C:
-			log.Println(len(pings))
 			if len(pings) == 0 {
 				continue
 			}
@@ -63,6 +65,79 @@ func (h *healthSignalServer) startSink() {
 			}
 		}
 	}
+}
+
+func (h *healthSignalServer) getpoints(endpoint int) (res []influxdb.Result, err error) {
+	qs := fmt.Sprintf("SELECT mean(\"response\") FROM ping WHERE (\"endpoint\"='%d') AND time >= now() - 12h GROUP BY time(10s) fill(0)", endpoint)
+	log.Println(qs)
+	q := influxdb.NewQuery(qs, "pings", "ms")
+	if response, err := h.influxClient.Query(q); err == nil {
+		if response.Error() != nil {
+			return res, response.Error()
+		}
+		res = response.Results
+	} else {
+		return res, err
+	}
+	return res, nil
+}
+
+type point struct {
+	Timestamp time.Time `json:"timestamp"`
+	Value     int64     `json:"value"`
+}
+
+func (h *healthSignalServer) query(rw http.ResponseWriter, req *http.Request) {
+	endpoint := req.URL.Query().Get("endpoint")
+	if endpoint == "" {
+		http.Error(rw, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+	endpointID, err := strconv.Atoi(endpoint)
+	if err != nil {
+		http.Error(rw, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+	response, err := h.getpoints(endpointID)
+	if err != nil {
+		log.Println(err)
+		http.Error(rw, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	var points []point
+	for _, result := range response {
+		for _, series := range result.Series {
+			for _, raw := range series.Values {
+				log.Println(raw)
+				if timestamp, ok := raw[0].(json.Number); ok {
+					if timeMs, err := timestamp.Int64(); err == nil {
+						if rawValue, ok := raw[1].(json.Number); ok {
+							if value, err := rawValue.Int64(); err == nil {
+								ts := time.Unix(0, timeMs*int64(time.Millisecond))
+								points = append(points, point{
+									Timestamp: ts,
+									Value:     value,
+								})
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	rw.Header().Add("Content-Type", "application/json")
+	b, err := json.Marshal(points)
+	if err != nil {
+		log.Println(err)
+		http.Error(rw, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	rw.Write(b)
+}
+
+func (h *healthSignalServer) startWeb() {
+	http.HandleFunc("/", h.query)
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *webport), nil))
 }
 
 func newHealthSignalServer() (*healthSignalServer, error) {
@@ -103,5 +178,6 @@ func main() {
 		panic(err)
 	}
 	pb.RegisterHealthSignalServer(grpcServer, server)
-	grpcServer.Serve(lis)
+	go grpcServer.Serve(lis)
+	server.startWeb()
 }
