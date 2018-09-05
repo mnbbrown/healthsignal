@@ -1,0 +1,18 @@
+language: go
+
+stages:
+  - compile
+  - name: deploy
+    if: (tag =~ ^v) AND (branch = master)
+
+jobs:
+  include:
+    - stage: compile
+      name: "Compile Server"
+      script: cd server && make deps build_all
+    - stage: compile
+      name: "Compile Client"
+      script: cd client && make deps build_all
+    - stage: deploy
+      name: "Deploy"
+      script: echo "Deploying"
