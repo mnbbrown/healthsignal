@@ -18,17 +18,11 @@ var (
 	location   = flag.String("location", "london", "The location we're checking from")
 )
 
-type endpoint struct {
-	id             int
-	url            string
-	expectedStatus int
-}
-
-func check(e endpoint) {
-	log.Printf("Checking: %s", e.url)
+func check(e *pb.Endpoint) {
+	log.Printf("Checking: %s", e.Url)
 	tp := newTransport()
 	httpClient := &http.Client{Transport: tp}
-	response, err := httpClient.Get(e.url)
+	response, err := httpClient.Get(e.Url)
 
 	timedOut := false
 	if err != nil {
@@ -41,7 +35,7 @@ func check(e endpoint) {
 		}
 	}
 	var onlineStatus int32
-	if response.StatusCode != e.expectedStatus {
+	if int32(response.StatusCode) != e.ExpectedStatus {
 		onlineStatus = 1
 	}
 
@@ -53,7 +47,7 @@ func check(e endpoint) {
 		ConnectionDuration: int32(tp.ConnDuration() / time.Millisecond),
 		Location:           *location,
 		TimedOut:           timedOut,
-		Endpoint:           int32(e.id),
+		Endpoint:           int32(e.Id),
 		OnlineStatus:       onlineStatus,
 	}
 	_, err = client.SavePing(ctx, ping)
@@ -65,12 +59,13 @@ func check(e endpoint) {
 }
 
 func run() {
-	endpoints := []endpoint{
-		endpoint{id: 1, url: "https://dev.api.primaryledger.labrys.group/_util/_healthcheck", expectedStatus: 200},
-		endpoint{id: 2, url: "https://lab.primaryledger.io/_util/_healthcheck", expectedStatus: 200},
-		endpoint{id: 3, url: "https://qa.api.primaryledger.labrys.group/_util/_healthcheck", expectedStatus: 200},
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	endpoints, err := client.GetEndpoints(ctx, &pb.EndpointsQuery{})
+	if err != nil {
+		return
 	}
-	for _, e := range endpoints {
+	for _, e := range endpoints.Endpoints {
 		go check(e)
 	}
 }

@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/go-chi/chi"
 	influxdb "github.com/influxdata/influxdb/client/v2"
+	"github.com/jmoiron/sqlx"
+	_ "github.com/lib/pq"
 	pb "github.com/mnbbrown/healthsignal/healthsignal"
 	"github.com/rs/cors"
 	"golang.org/x/net/context"
@@ -19,9 +22,11 @@ import (
 var (
 	port    = flag.Int("port", 10000, "HealthSignal API Port")
 	webport = flag.Int("webport", 8080, "HealthSignal Web API Port")
+	dbDsn   = flag.String("db", "user=healthsignal password=healthsignal dbname=healthsignal sslmode=disable", "Connection string for postgres instance")
 )
 
 type healthSignalServer struct {
+	db           *sqlx.DB
 	influxClient influxdb.Client
 	pingChan     chan *pb.Ping
 }
@@ -70,7 +75,7 @@ func (h *healthSignalServer) startSink() {
 }
 
 func (h *healthSignalServer) getpoints(endpoint int) (res []influxdb.Result, err error) {
-	qs := fmt.Sprintf("SELECT mean(\"requestTime\"), mean(\"connectionTime\"), last(\"status\") FROM ping WHERE (\"endpoint\"='%d') AND time >= now() - 1h GROUP BY time(15s) fill(0)", endpoint)
+	qs := fmt.Sprintf("SELECT mean(\"requestTime\"), mean(\"connectionTime\"), last(\"status\") FROM ping WHERE (\"endpoint\"='%d') AND time >= now() - 1h GROUP BY time(30s) fill(none)", endpoint)
 	q := influxdb.NewQuery(qs, "pings", "ms")
 	if response, err := h.influxClient.Query(q); err == nil {
 		if response.Error() != nil {
@@ -91,7 +96,7 @@ type point struct {
 }
 
 func (h *healthSignalServer) query(rw http.ResponseWriter, req *http.Request) {
-	endpoint := req.URL.Query().Get("endpoint")
+	endpoint := chi.URLParam(req, "endpointID")
 	if endpoint == "" {
 		http.Error(rw, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
@@ -136,11 +141,33 @@ func (h *healthSignalServer) query(rw http.ResponseWriter, req *http.Request) {
 }
 
 func (h *healthSignalServer) startWeb() {
-	handler := http.HandlerFunc(h.query)
-	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *webport), cors.Default().Handler(handler)))
+	r := chi.NewRouter()
+	r.Get("/endpoints", func(rw http.ResponseWriter, req *http.Request) {
+		endpoints, err := h.listEndpoints()
+		if err != nil {
+			log.Println(err)
+			http.Error(rw, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		j, err := json.Marshal(endpoints)
+		if err != nil {
+			log.Println(err)
+			http.Error(rw, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		rw.Header().Add("Content-Type", "application/json")
+		rw.Write(j)
+	})
+	r.Get("/endpoints/{endpointID}/data", h.query)
+	log.Printf("HTTP API listening on %d", webport)
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *webport), cors.Default().Handler(r)))
 }
 
 func newHealthSignalServer() (*healthSignalServer, error) {
+	db, err := sqlx.Connect("postgres", *dbDsn)
+	if err != nil {
+		return nil, err
+	}
 	c, err := influxdb.NewHTTPClient(influxdb.HTTPConfig{
 		Addr:     "http://localhost:8086",
 		Username: "healthsignal",
@@ -155,6 +182,7 @@ func newHealthSignalServer() (*healthSignalServer, error) {
 	}
 	log.Printf("Connected to influxdb %s", version)
 	server := &healthSignalServer{
+		db:           db,
 		influxClient: c,
 		pingChan:     make(chan *pb.Ping),
 	}
@@ -168,9 +196,35 @@ func (h *healthSignalServer) SavePing(ctx context.Context, ping *pb.Ping) (*pb.E
 	return &pb.Empty{}, nil
 }
 
+func (h *healthSignalServer) listEndpoints() ([]*pb.Endpoint, error) {
+	rows, err := h.db.Query("SELECT id, url, expectedstatus, name FROM endpoints")
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
+	var endpoints []*pb.Endpoint
+	for rows.Next() {
+		endpoint := &pb.Endpoint{}
+		err = rows.Scan(&endpoint.Id, &endpoint.Url, &endpoint.ExpectedStatus, &endpoint.Name)
+		if err != nil {
+			log.Println(err)
+			return nil, err
+		}
+		endpoints = append(endpoints, endpoint)
+	}
+	return endpoints, nil
+}
+
+func (h *healthSignalServer) GetEndpoints(ctx context.Context, query *pb.EndpointsQuery) (*pb.Endpoints, error) {
+	endpoints, err := h.listEndpoints()
+	log.Printf("Found %d endpoints", len(endpoints))
+	return &pb.Endpoints{Endpoints: endpoints}, err
+}
+
 func main() {
 	flag.Parse()
 	lis, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", *port))
+
 	var opts []grpc.ServerOption
 	grpcServer := grpc.NewServer(opts...)
 	server, err := newHealthSignalServer()
@@ -178,6 +232,7 @@ func main() {
 		panic(err)
 	}
 	pb.RegisterHealthSignalServer(grpcServer, server)
+	log.Printf("gRPC listening on %d", port)
 	go grpcServer.Serve(lis)
 	server.startWeb()
 }

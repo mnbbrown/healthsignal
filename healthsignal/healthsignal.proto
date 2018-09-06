@@ -2,6 +2,20 @@ syntax = "proto3";
 
 service HealthSignal {
   rpc SavePing(Ping) returns (Empty) {}
+  rpc GetEndpoints(EndpointsQuery) returns (Endpoints) {}
+}
+
+message EndpointsQuery {}
+
+message Endpoints {
+  repeated Endpoint endpoints = 1;
+}
+
+message Endpoint {
+  int32 id = 1;
+  string url = 2;
+  int32 expectedStatus = 3;
+  string name = 4;
 }
 
 message Empty {}
