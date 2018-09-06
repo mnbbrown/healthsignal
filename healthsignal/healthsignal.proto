@@ -13,4 +13,5 @@ message Ping {
   string location = 4;
   int32 endpoint = 5;
   bool timedOut = 6;
+  int32 onlineStatus = 7;
 }

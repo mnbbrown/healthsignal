@@ -6,6 +6,7 @@ import (
 	"fmt"
 	influxdb "github.com/influxdata/influxdb/client/v2"
 	pb "github.com/mnbbrown/healthsignal/healthsignal"
+	"github.com/rs/cors"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"log"
@@ -30,10 +31,12 @@ func preparePings(batch influxdb.BatchPoints, pings []*pb.Ping) {
 		tags := map[string]string{
 			"location": ping.Location,
 			"endpoint": strconv.FormatInt(int64(ping.Endpoint), 10),
+			"timedOut": strconv.FormatBool(ping.TimedOut),
 		}
 		fields := map[string]interface{}{
-			"response": ping.RequestDuration,
-			"system":   ping.ConnectionDuration,
+			"requestTime":    ping.RequestDuration,
+			"connectionTime": ping.ConnectionDuration,
+			"status":         ping.OnlineStatus,
 		}
 		pt, _ := influxdb.NewPoint("ping", tags, fields, time.Now())
 		batch.AddPoint(pt)
@@ -46,7 +49,6 @@ func (h *healthSignalServer) startSink() {
 	for {
 		select {
 		case ping := <-h.pingChan:
-			log.Println("Here")
 			pings = append(pings, ping)
 		case <-ticker.C:
 			if len(pings) == 0 {
@@ -68,8 +70,7 @@ func (h *healthSignalServer) startSink() {
 }
 
 func (h *healthSignalServer) getpoints(endpoint int) (res []influxdb.Result, err error) {
-	qs := fmt.Sprintf("SELECT mean(\"response\") FROM ping WHERE (\"endpoint\"='%d') AND time >= now() - 12h GROUP BY time(10s) fill(0)", endpoint)
-	log.Println(qs)
+	qs := fmt.Sprintf("SELECT mean(\"requestTime\"), mean(\"connectionTime\"), last(\"status\") FROM ping WHERE (\"endpoint\"='%d') AND time >= now() - 1h GROUP BY time(15s) fill(0)", endpoint)
 	q := influxdb.NewQuery(qs, "pings", "ms")
 	if response, err := h.influxClient.Query(q); err == nil {
 		if response.Error() != nil {
@@ -83,8 +84,10 @@ func (h *healthSignalServer) getpoints(endpoint int) (res []influxdb.Result, err
 }
 
 type point struct {
-	Timestamp time.Time `json:"timestamp"`
-	Value     int64     `json:"value"`
+	Timestamp      int64       `json:"timestamp"`
+	ConnectionTime json.Number `json:"connectionTime"`
+	RequestTime    json.Number `json:"requestTime"`
+	Status         json.Number `json:"status"`
 }
 
 func (h *healthSignalServer) query(rw http.ResponseWriter, req *http.Request) {
@@ -108,18 +111,15 @@ func (h *healthSignalServer) query(rw http.ResponseWriter, req *http.Request) {
 	for _, result := range response {
 		for _, series := range result.Series {
 			for _, raw := range series.Values {
-				log.Println(raw)
 				if timestamp, ok := raw[0].(json.Number); ok {
 					if timeMs, err := timestamp.Int64(); err == nil {
-						if rawValue, ok := raw[1].(json.Number); ok {
-							if value, err := rawValue.Int64(); err == nil {
-								ts := time.Unix(0, timeMs*int64(time.Millisecond))
-								points = append(points, point{
-									Timestamp: ts,
-									Value:     value,
-								})
-							}
-						}
+						ts := time.Unix(0, timeMs*int64(time.Millisecond))
+						points = append(points, point{
+							Timestamp:      ts.Unix(),
+							ConnectionTime: raw[1].(json.Number),
+							RequestTime:    raw[2].(json.Number),
+							Status:         raw[3].(json.Number),
+						})
 					}
 				}
 			}
@@ -136,8 +136,8 @@ func (h *healthSignalServer) query(rw http.ResponseWriter, req *http.Request) {
 }
 
 func (h *healthSignalServer) startWeb() {
-	http.HandleFunc("/", h.query)
-	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *webport), nil))
+	handler := http.HandlerFunc(h.query)
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *webport), cors.Default().Handler(handler)))
 }
 
 func newHealthSignalServer() (*healthSignalServer, error) {

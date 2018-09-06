@@ -29,26 +29,32 @@ func check(e endpoint) {
 	tp := newTransport()
 	httpClient := &http.Client{Transport: tp}
 	response, err := httpClient.Get(e.url)
+
+	timedOut := false
 	if err != nil {
 		if err, ok := err.(net.Error); ok && err.Timeout() {
 			log.Printf("Failed to get endpoint. Timed out")
+			timedOut = true
 		} else {
 			log.Printf("Failed to get endpoint %s", err)
+			return
 		}
-		return
 	}
+	var onlineStatus int32
 	if response.StatusCode != e.expectedStatus {
-		return
+		onlineStatus = 1
 	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	ping := &pb.Ping{
 		Status:             int32(response.StatusCode),
-		RequestDuration:    int32(tp.ReqDuration()),
-		ConnectionDuration: int32(tp.ConnDuration()),
+		RequestDuration:    int32(tp.ReqDuration() / time.Millisecond),
+		ConnectionDuration: int32(tp.ConnDuration() / time.Millisecond),
 		Location:           *location,
-		TimedOut:           false,
+		TimedOut:           timedOut,
 		Endpoint:           int32(e.id),
+		OnlineStatus:       onlineStatus,
 	}
 	_, err = client.SavePing(ctx, ping)
 	if err != nil {

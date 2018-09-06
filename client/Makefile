@@ -24,6 +24,9 @@ default: build
 
 all: clean build_all
 
+run: build
+	__dist/healthsignal-client
+
 setup:
 	mkdir -p __dist
 
