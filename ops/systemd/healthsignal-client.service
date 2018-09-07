@@ -1,0 +1,18 @@
+[Unit]
+Description=HealthSignal Client
+ConditionPathExists=/usr/local/bin/healthsignal-client-linux-amd64
+After=network.target
+
+[Service]
+Type=simple
+User=healthsignal
+Group=healthsignal
+LimitNOFILE=1024
+
+Restart=on-failure
+RestartSec=10
+startLimitIntervalSec=60
+ExecStart=/usr/local/bin/healthsignal-client-linux-amd64 -location="london"
+
+[Install]
+WantedBy=multi-user.target

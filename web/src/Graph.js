@@ -6,15 +6,14 @@ import {
   ChartContainer,
   ChartRow,
   YAxis,
-  LineChart,
-  EventMarker
+  LineChart
 } from "react-timeseries-charts";
 import { TimeSeries } from "pondjs";
 import "./Graph.css";
 
 class Graph extends Component {
   state = {
-    data: null
+    data: {}
   };
 
   syncData = () => {
@@ -24,23 +23,39 @@ class Graph extends Component {
     })
       .then(response => response.json())
       .then(data => {
-        const timeseries = new TimeSeries({
-          name: "1",
-          columns: ["time", "requestTime", "connectionTime"],
-          points: data.map(p => [
-            p["timestamp"],
-            p["requestTime"],
-            p["connectionTime"]
-          ])
-        });
-        this.setState({
-          data: this.state.data
-            ? TimeSeries.timeSeriesListMerge({
-                name: "1",
-                seriesList: [timeseries, this.state.data]
+        let locations = data.reduce((lcs, point) => {
+          lcs[point["location"]] = lcs[point["location"]] || [];
+          lcs[point["location"]].push([
+            point["timestamp"],
+            point["requestTime"],
+            point["connectionTime"],
+            point["status"]
+          ]);
+          return lcs;
+        }, {});
+        locations = Object.keys(locations).reduce((lcns, lcn) => {
+          return {
+            ...lcns,
+            [lcn]: new TimeSeries({
+              name: lcn,
+              columns: ["time", "requestTime", "connectionTime", "status"],
+              points: locations[lcn]
+            })
+          };
+        }, {});
+        const merged = Object.keys(locations).reduce((mlcs, lcn) => {
+          if (this.state.data[lcn]) {
+            return {
+              ...mlcs,
+              [lcn]: TimeSeries.timeSeriesListMerge({
+                name: lcn,
+                seriesList: [locations[lcn], this.state.data[lcn]]
               })
-            : timeseries
-        });
+            };
+          }
+          return { ...mlcs, [lcn]: locations[lcn] };
+        }, {});
+        this.setState({ data: merged });
       })
       .catch(e => console.error(e));
   };
@@ -56,64 +71,48 @@ class Graph extends Component {
     clearInterval(this.poller);
   }
 
-  handleTrackerChanged = t => {
-    if (t) {
-      const e = this.state.data.atTime(t);
-      const eventTime = new Date(
-        e.begin().getTime() + (e.end().getTime() - e.begin().getTime()) / 2
-      );
-      const eventValue = e.get("requestTime");
-      const v = `${Math.round(eventValue)}ms`;
-      this.setState({ tracker: eventTime, trackerValue: v, trackerEvent: e });
-    } else {
-      this.setState({ tracker: null, trackerValue: null, trackerEvent: null });
-    }
-  };
-
   render() {
     const { data } = this.state;
-    const lineStyle = styler([
-      { key: "requestTime", color: "steelblue", width: 2 }
-    ]);
+    const colors = ["steelblue", "green", "pink"];
+    const generateLineStyle = index => {
+      return styler([{ key: "requestTime", color: colors[index], width: 2 }]);
+    };
+    if (Object.keys(data).length === 0) {
+      return null;
+    }
+    const locations = Object.keys(data);
+    const first = data[locations[0]];
     return (
       data && (
         <div className="Graph">
           <h3>{this.props.endpoint.name}</h3>
           <Resizable>
             <ChartContainer
-              timeRange={data.timerange()}
+              timeRange={first.timerange()}
               enablePanZoom={true}
               width={800}
-              onTrackerChanged={this.handleTrackerChanged}
             >
               <ChartRow height="100">
                 <YAxis
                   id="response"
                   min={0}
-                  max={data.max("requestTime") * 2}
+                  max={first.max("requestTime") * 2}
                   width="60"
                   label="ms"
                   type="linear"
                 />
                 <Charts>
-                  <LineChart
-                    style={lineStyle}
-                    interpolation="curveLinear"
-                    axis="response"
-                    series={data}
-                    columns={["requestTime"]}
-                  />
-                  <EventMarker
-                    event={this.state.trackerEvent}
-                    markerLabel={this.state.trackerValue}
-                    markerLabelAlign="top"
-                    markerLabelStyle={{ fill: "#000", stroke: "white" }}
-                    type="point"
-                    axis="response"
-                    column="requestTime"
-                    markerRadius={2}
-                    markerStyle={{ fill: "black" }}
-                  />
+                  {locations.map((location, index) => {
+                    return (
+                      <LineChart
+                        key={location}
+                        style={generateLineStyle(index)}
+                        axis="response"
+                        series={data[location]}
+                        columns={["requestTime"]}
+                      />
+                    );
+                  })}
                 </Charts>
               </ChartRow>
             </ChartContainer>

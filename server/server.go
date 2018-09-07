@@ -75,7 +75,7 @@ func (h *healthSignalServer) startSink() {
 }
 
 func (h *healthSignalServer) getpoints(endpoint int) (res []influxdb.Result, err error) {
-	qs := fmt.Sprintf("SELECT mean(\"requestTime\"), mean(\"connectionTime\"), last(\"status\") FROM ping WHERE (\"endpoint\"='%d') AND time >= now() - 1h GROUP BY time(30s) fill(none)", endpoint)
+	qs := fmt.Sprintf("SELECT mean(\"requestTime\"), mean(\"connectionTime\"), last(\"status\") FROM ping WHERE (\"endpoint\"='%d') AND time >= now() - 1h GROUP BY time(30s),location fill(none)", endpoint)
 	q := influxdb.NewQuery(qs, "pings", "ms")
 	if response, err := h.influxClient.Query(q); err == nil {
 		if response.Error() != nil {
@@ -93,6 +93,7 @@ type point struct {
 	ConnectionTime json.Number `json:"connectionTime"`
 	RequestTime    json.Number `json:"requestTime"`
 	Status         json.Number `json:"status"`
+	Location       string      `json:"location"`
 }
 
 func (h *healthSignalServer) query(rw http.ResponseWriter, req *http.Request) {
@@ -119,12 +120,16 @@ func (h *healthSignalServer) query(rw http.ResponseWriter, req *http.Request) {
 				if timestamp, ok := raw[0].(json.Number); ok {
 					if timeMs, err := timestamp.Int64(); err == nil {
 						ts := time.Unix(0, timeMs*int64(time.Millisecond))
-						points = append(points, point{
+						point := point{
 							Timestamp:      ts.Unix(),
 							ConnectionTime: raw[1].(json.Number),
 							RequestTime:    raw[2].(json.Number),
 							Status:         raw[3].(json.Number),
-						})
+						}
+						if location, ok := series.Tags["location"]; ok {
+							point.Location = location
+						}
+						points = append(points, point)
 					}
 				}
 			}
