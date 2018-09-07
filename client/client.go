@@ -1,10 +1,12 @@
 package main
 
 import (
+	"crypto/x509"
 	"flag"
 	pb "github.com/mnbbrown/healthsignal/healthsignal"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"log"
 	"net"
 	"net/http"
@@ -14,8 +16,9 @@ import (
 var client pb.HealthSignalClient
 
 var (
-	serverAddr = flag.String("server_addr", "127.0.0.1:10000", "The server address in the format of host:port")
+	serverAddr = flag.String("server_addr", "grpc.healthsignal.live:10443", "The server address in the format of host:port")
 	location   = flag.String("location", "london", "The location we're checking from")
+	tls        = flag.Bool("tls", true, "Connect with TLS")
 )
 
 func check(e *pb.Endpoint) {
@@ -63,8 +66,10 @@ func run() {
 	defer cancel()
 	endpoints, err := client.GetEndpoints(ctx, &pb.EndpointsQuery{})
 	if err != nil {
+		log.Printf("Failed to get endpoints %v", err)
 		return
 	}
+	log.Printf("Checking %d endpoints", len(endpoints.Endpoints))
 	for _, e := range endpoints.Endpoints {
 		go check(e)
 	}
@@ -73,11 +78,25 @@ func run() {
 func main() {
 	flag.Parse()
 
-	conn, err := grpc.Dial(*serverAddr, grpc.WithInsecure())
-	if err != nil {
-		log.Fatalf("Failed to connect: %v", err)
+	var conn *grpc.ClientConn
+	if *tls {
+		pool, err := x509.SystemCertPool()
+		creds := credentials.NewClientTLSFromCert(pool, "")
+		conn, err = grpc.Dial(*serverAddr, grpc.WithTransportCredentials(creds))
+		if err != nil {
+			log.Fatalf("Failed to connect via tls: %v", err)
+		}
+		log.Printf("Successfully connected to %s with TLS", *serverAddr)
+	} else {
+		var err error
+		conn, err = grpc.Dial(*serverAddr, grpc.WithInsecure())
+		if err != nil {
+			log.Fatalf("Failed to connect: %v", err)
+		}
+		log.Printf("Successfully connected to %s without TLS", *serverAddr)
 	}
 	defer conn.Close()
+
 	client = pb.NewHealthSignalClient(conn)
 
 	ticker := time.NewTicker(time.Second * 5)

@@ -8,7 +8,7 @@ class App extends Component {
   };
 
   componentDidMount() {
-    fetch("http://localhost:8080/endpoints")
+    fetch("https://api.healthsignal.live/endpoints")
       .then(response => response.json())
       .then(data => this.setState({ endpoints: data }));
   }

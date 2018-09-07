@@ -159,7 +159,7 @@ func (h *healthSignalServer) startWeb() {
 		rw.Write(j)
 	})
 	r.Get("/endpoints/{endpointID}/data", h.query)
-	log.Printf("HTTP API listening on %d", webport)
+	log.Printf("HTTP API listening on %d", *webport)
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *webport), cors.Default().Handler(r)))
 }
 
@@ -232,7 +232,7 @@ func main() {
 		panic(err)
 	}
 	pb.RegisterHealthSignalServer(grpcServer, server)
-	log.Printf("gRPC listening on %d", port)
+	log.Printf("gRPC listening on %d", *port)
 	go grpcServer.Serve(lis)
 	server.startWeb()
 }

@@ -19,7 +19,7 @@ class Graph extends Component {
 
   syncData = () => {
     const { endpoint } = this.props;
-    fetch(`http://localhost:8080/endpoints/${endpoint.id}/data`, {
+    fetch(`https://api.healthsignal.live/endpoints/${endpoint.id}/data`, {
       method: "GET"
     })
       .then(response => response.json())
@@ -63,8 +63,7 @@ class Graph extends Component {
         e.begin().getTime() + (e.end().getTime() - e.begin().getTime()) / 2
       );
       const eventValue = e.get("requestTime");
-      const v = `${eventValue}ms`;
-      console.log(v);
+      const v = `${Math.round(eventValue)}ms`;
       this.setState({ tracker: eventTime, trackerValue: v, trackerEvent: e });
     } else {
       this.setState({ tracker: null, trackerValue: null, trackerEvent: null });
@@ -87,11 +86,11 @@ class Graph extends Component {
               width={800}
               onTrackerChanged={this.handleTrackerChanged}
             >
-              <ChartRow height="200">
+              <ChartRow height="100">
                 <YAxis
                   id="response"
                   min={0}
-                  max={1000}
+                  max={data.max("requestTime") * 2}
                   width="60"
                   label="ms"
                   type="linear"
@@ -107,9 +106,9 @@ class Graph extends Component {
                   <EventMarker
                     event={this.state.trackerEvent}
                     markerLabel={this.state.trackerValue}
-                    markerLabelAlign="left"
-                    markerLabelStyle={{ fill: "#2db3d1", stroke: "white" }}
-                    type="flag"
+                    markerLabelAlign="top"
+                    markerLabelStyle={{ fill: "#000", stroke: "white" }}
+                    type="point"
                     axis="response"
                     column="requestTime"
                     markerRadius={2}
