@@ -26,7 +26,6 @@ func check(e *pb.Endpoint) {
 	tp := newTransport()
 	httpClient := &http.Client{Transport: tp}
 	response, err := httpClient.Get(e.Url)
-
 	timedOut := false
 	if err != nil {
 		if err, ok := err.(net.Error); ok && err.Timeout() {
@@ -34,9 +33,12 @@ func check(e *pb.Endpoint) {
 			timedOut = true
 		} else {
 			log.Printf("Failed to get endpoint %s", err)
+			response.Body.Close()
 			return
 		}
 	}
+	defer response.Body.Close()
+
 	var onlineStatus int32
 	if int32(response.StatusCode) != e.ExpectedStatus {
 		onlineStatus = 1

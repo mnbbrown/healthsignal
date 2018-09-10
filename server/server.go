@@ -75,7 +75,7 @@ func (h *healthSignalServer) startSink() {
 }
 
 func (h *healthSignalServer) getpoints(endpoint int) (res []influxdb.Result, err error) {
-	qs := fmt.Sprintf("SELECT mean(\"requestTime\"), mean(\"connectionTime\"), last(\"status\") FROM ping WHERE (\"endpoint\"='%d') AND time >= now() - 1h GROUP BY time(30s),location fill(none)", endpoint)
+	qs := fmt.Sprintf("SELECT mean(\"requestTime\"), mean(\"connectionTime\"), last(\"status\") FROM ping WHERE (\"endpoint\"='%d') AND time >= now() - 6h GROUP BY time(30s),location fill(none)", endpoint)
 	q := influxdb.NewQuery(qs, "pings", "ms")
 	if response, err := h.influxClient.Query(q); err == nil {
 		if response.Error() != nil {
@@ -113,7 +113,7 @@ func (h *healthSignalServer) query(rw http.ResponseWriter, req *http.Request) {
 		http.Error(rw, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
-	var points []point
+	points := make([]point, 0)
 	for _, result := range response {
 		for _, series := range result.Series {
 			for _, raw := range series.Values {

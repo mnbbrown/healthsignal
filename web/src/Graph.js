@@ -9,53 +9,59 @@ import {
   LineChart
 } from "react-timeseries-charts";
 import { TimeSeries } from "pondjs";
+import api from "./api";
 import "./Graph.css";
 
 class Graph extends Component {
   state = {
-    data: {}
+    data: {},
+    locations: []
   };
 
   syncData = () => {
     const { endpoint } = this.props;
-    fetch(`https://api.healthsignal.live/endpoints/${endpoint.id}/data`, {
-      method: "GET"
-    })
-      .then(response => response.json())
+    api
+      .getEndpointData(endpoint)
       .then(data => {
-        let locations = data.reduce((lcs, point) => {
-          lcs[point["location"]] = lcs[point["location"]] || [];
-          lcs[point["location"]].push([
-            point["timestamp"],
-            point["requestTime"],
-            point["connectionTime"],
-            point["status"]
-          ]);
-          return lcs;
+        data = data.reduce((dataByTime, point) => {
+          dataByTime[point["timestamp"]] = dataByTime[point["timestamp"]] || {};
+          const location = point["location"];
+          dataByTime[point["timestamp"]][location] = point;
+          return dataByTime;
         }, {});
-        locations = Object.keys(locations).reduce((lcns, lcn) => {
-          return {
-            ...lcns,
-            [lcn]: new TimeSeries({
-              name: lcn,
-              columns: ["time", "requestTime", "connectionTime", "status"],
-              points: locations[lcn]
-            })
-          };
-        }, {});
-        const merged = Object.keys(locations).reduce((mlcs, lcn) => {
-          if (this.state.data[lcn]) {
-            return {
-              ...mlcs,
-              [lcn]: TimeSeries.timeSeriesListMerge({
-                name: lcn,
-                seriesList: [locations[lcn], this.state.data[lcn]]
-              })
-            };
-          }
-          return { ...mlcs, [lcn]: locations[lcn] };
-        }, {});
-        this.setState({ data: merged });
+
+        let locations = new Set();
+        let columns = new Set();
+        data = Object.keys(data).map(timestamp => {
+          const tick = data[timestamp];
+          const locationNames = Object.keys(tick);
+          return locationNames.reduce(
+            (prefixed, location) => {
+              locations.add(location);
+              const p = Object.keys(tick[location]).reduce((p, dps) => {
+                if (dps === "location" || dps === "timestamp") {
+                  return p;
+                }
+                const header = `${location}_${dps}`;
+                columns.add(header);
+                return { ...p, [`${location}_${dps}`]: tick[location][dps] };
+              }, {});
+              return { ...prefixed, ...p };
+            },
+            { time: parseInt(timestamp, 10) }
+          );
+        });
+        columns = ["time", ...columns];
+        locations = [...locations];
+        data = data.map(row => {
+          return columns.map(c => row[c]);
+        });
+        data = new TimeSeries({
+          name: this.props.endpoint.name,
+          points: data,
+          columns
+        });
+        this.setState({ locations, data });
       })
       .catch(e => console.error(e));
   };
@@ -72,23 +78,27 @@ class Graph extends Component {
   }
 
   render() {
-    const { data } = this.state;
-    const colors = ["steelblue", "green", "pink"];
-    const generateLineStyle = index => {
-      return styler([{ key: "requestTime", color: colors[index], width: 2 }]);
-    };
-    if (Object.keys(data).length === 0) {
+    const { data, locations } = this.state;
+    if (!data || locations.length === 0) {
       return null;
     }
-    const locations = Object.keys(data);
-    const first = data[locations[0]];
+    const colors = ["steelblue", "green", "pink"];
+    const lineStyle = new styler(
+      locations.map((location, index) => {
+        return {
+          key: `${location}_requestTime`,
+          color: colors[index],
+          width: 2
+        };
+      })
+    );
     return (
       data && (
         <div className="Graph">
           <h3>{this.props.endpoint.name}</h3>
           <Resizable>
             <ChartContainer
-              timeRange={first.timerange()}
+              timeRange={data.timerange()}
               enablePanZoom={true}
               width={800}
             >
@@ -96,23 +106,18 @@ class Graph extends Component {
                 <YAxis
                   id="response"
                   min={0}
-                  max={first.max("requestTime") * 2}
+                  max={1200}
                   width="60"
                   label="ms"
                   type="linear"
                 />
                 <Charts>
-                  {locations.map((location, index) => {
-                    return (
-                      <LineChart
-                        key={location}
-                        style={generateLineStyle(index)}
-                        axis="response"
-                        series={data[location]}
-                        columns={["requestTime"]}
-                      />
-                    );
-                  })}
+                  <LineChart
+                    lineStyle={lineStyle}
+                    axis="response"
+                    series={data}
+                    columns={locations.map(l => `${l}_requestTime`)}
+                  />
                 </Charts>
               </ChartRow>
             </ChartContainer>

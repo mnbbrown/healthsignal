@@ -1,5 +1,6 @@
 import React, { Component } from "react";
 import Graph from "./Graph";
+import api from "./api";
 import "./App.css";
 
 class App extends Component {
@@ -8,9 +9,7 @@ class App extends Component {
   };
 
   componentDidMount() {
-    fetch("https://api.healthsignal.live/endpoints")
-      .then(response => response.json())
-      .then(data => this.setState({ endpoints: data }));
+    api.getEndpoints().then(data => this.setState({ endpoints: data }));
   }
 
   render() {
@@ -18,7 +17,7 @@ class App extends Component {
       <div className="App">
         <div className="App-container">
           {this.state.endpoints.map((d, i) => (
-            <Graph endpoint={d} key={i} />
+            <Graph endpoint={d.id} key={i} />
           ))}
         </div>
       </div>
