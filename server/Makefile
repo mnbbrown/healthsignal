@@ -36,9 +36,6 @@ build_all: setup
 	$(foreach GOOS, $(PLATFORMS),\
 	$(foreach GOARCH, $(ARCHITECTURES), $(shell export GOOS=$(GOOS); export GOARCH=$(GOARCH); go build -v -o __dist/$(BINARY)-$(GOOS)-$(GOARCH))))
 
-deps:
-	go get ./...
-
 install:
 	go install ${LDFLAGS}
 

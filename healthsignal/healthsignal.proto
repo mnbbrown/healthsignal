@@ -15,17 +15,23 @@ message Endpoint {
   int32 id = 1;
   string url = 2;
   int32 expectedStatus = 3;
-  string name = 4;
+  string method = 4;
+  string name = 5;
 }
 
 message Empty {}
 
 message Ping {
-  int32 status = 1;
-  int32 requestDuration = 2;
-  int32 connectionDuration = 3;
-  string location = 4;
-  int32 endpoint = 5;
-  bool timedOut = 6;
-  int32 onlineStatus = 7;
+  int32 endpoint = 1;
+  string location = 2;
+  int32 httpStatus = 3;
+  string protocol = 4;
+  int32 dnsLookupDuration = 5;
+  int32 tcpConnectionDuration = 6;
+  int32 tlsHandshakeDuration = 7;
+  int32 serverProcessingDuration = 8;
+  int32 contentTransferDuration = 9;
+  bool timedOut = 10;
+  bool online = 11;
+  bool validTls = 12;
 }

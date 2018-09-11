@@ -1,15 +1,22 @@
 package main
 
 import (
+	"crypto/tls"
 	"crypto/x509"
 	"flag"
 	pb "github.com/mnbbrown/healthsignal/healthsignal"
 	"golang.org/x/net/context"
+	"golang.org/x/net/http2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
+	"net/http/httptrace"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -18,42 +25,141 @@ var client pb.HealthSignalClient
 var (
 	serverAddr = flag.String("server_addr", "grpc.healthsignal.live:10443", "The server address in the format of host:port")
 	location   = flag.String("location", "london", "The location we're checking from")
-	tls        = flag.Bool("tls", true, "Connect with TLS")
+	useTLS     = flag.Bool("tls", true, "Connect with TLS")
 )
+
+func createBody(body string) io.Reader {
+	return strings.NewReader(body)
+}
+
+func newRequest(method string, url *url.URL, body string) (*http.Request, error) {
+	req, err := http.NewRequest(method, url.String(), createBody(body))
+	return req, err
+}
+
+func dialContext(network string) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, _, addr string) (net.Conn, error) {
+		return (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+			DualStack: false,
+		}).DialContext(ctx, network, addr)
+	}
+}
+
+func readResponseBody(req *http.Request, resp *http.Response) error {
+	w := ioutil.Discard
+	if _, err := io.Copy(w, resp.Body); err != nil && w != ioutil.Discard {
+		return err
+	}
+	return nil
+}
 
 func check(e *pb.Endpoint) {
 	log.Printf("Checking: %s", e.Url)
-	tp := newTransport()
-	httpClient := &http.Client{Transport: tp}
-	response, err := httpClient.Get(e.Url)
-	timedOut := false
+
+	url, err := url.Parse(e.Url)
 	if err != nil {
-		if err, ok := err.(net.Error); ok && err.Timeout() {
-			log.Printf("Failed to get endpoint. Timed out")
-			timedOut = true
-		} else {
-			log.Printf("Failed to get endpoint %s", err)
-			response.Body.Close()
-			return
+		log.Printf("Failed to parse URL: %v", err)
+		return
+	}
+
+	req, err := newRequest(e.Method, url, "")
+	if err != nil {
+		log.Printf("Failed to build request: %v", err)
+		return
+	}
+
+	var dnsStart, dnsDone, connStart, connDone, gotConn, gotFirstByte, tlsStart, tlsEnd, bodyReadEnd time.Time
+
+	trace := &httptrace.ClientTrace{
+		DNSStart: func(_ httptrace.DNSStartInfo) { dnsStart = time.Now() },
+		DNSDone:  func(_ httptrace.DNSDoneInfo) { dnsDone = time.Now() },
+		ConnectStart: func(_, _ string) {
+			connStart = time.Now()
+		},
+		ConnectDone: func(net, addr string, err error) {
+			if err != nil {
+
+			}
+			connDone = time.Now()
+		},
+		GotConn:              func(_ httptrace.GotConnInfo) { gotConn = time.Now() },
+		GotFirstResponseByte: func() { gotFirstByte = time.Now() },
+		TLSHandshakeStart:    func() { tlsStart = time.Now() },
+		TLSHandshakeDone:     func(_ tls.ConnectionState, _ error) { tlsEnd = time.Now() },
+	}
+	req = req.WithContext(httptrace.WithClientTrace(context.Background(), trace))
+	tr := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+	tr.DialContext = dialContext("tcp4")
+
+	switch url.Scheme {
+	case "https":
+		host, _, err := net.SplitHostPort(req.Host)
+		if err != nil {
+			host = req.Host
+		}
+
+		tr.TLSClientConfig = &tls.Config{
+			ServerName:         host,
+			InsecureSkipVerify: true,
+		}
+
+		err = http2.ConfigureTransport(tr)
+		if err != nil {
+			log.Fatalf("failed to prepare transport for HTTP/2: %v", err)
 		}
 	}
-	defer response.Body.Close()
 
-	var onlineStatus int32
-	if int32(response.StatusCode) != e.ExpectedStatus {
-		onlineStatus = 1
+	httpClient := &http.Client{
+		Transport: tr,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
 
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		log.Printf("failed to read response: %v", err)
+		return
+	}
+	err = readResponseBody(req, resp)
+	defer resp.Body.Close()
+	if err != nil {
+		log.Printf("failed to read body: %v", err)
+		return
+	}
+	bodyReadEnd = time.Now()
+
+	onlineStatus := true
+	if int32(resp.StatusCode) != e.ExpectedStatus {
+		onlineStatus = false
+	}
+
+	deltaToMs := func(start, end time.Time) int32 {
+		return int32(end.Sub(start) / time.Millisecond)
+	}
+
+	// Send to server
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	ping := &pb.Ping{
-		Status:             int32(response.StatusCode),
-		RequestDuration:    int32(tp.ReqDuration() / time.Millisecond),
-		ConnectionDuration: int32(tp.ConnDuration() / time.Millisecond),
-		Location:           *location,
-		TimedOut:           timedOut,
-		Endpoint:           int32(e.Id),
-		OnlineStatus:       onlineStatus,
+		Endpoint:                 int32(e.Id),
+		Location:                 *location,
+		HttpStatus:               int32(resp.StatusCode),
+		Protocol:                 "http",
+		DnsLookupDuration:        deltaToMs(dnsStart, dnsDone),
+		TcpConnectionDuration:    deltaToMs(connStart, connDone),
+		TlsHandshakeDuration:     deltaToMs(tlsStart, tlsEnd),
+		ServerProcessingDuration: deltaToMs(gotConn, gotFirstByte),
+		ContentTransferDuration:  deltaToMs(gotFirstByte, bodyReadEnd),
+		Online:                   onlineStatus,
 	}
 	_, err = client.SavePing(ctx, ping)
 	if err != nil {
@@ -81,7 +187,7 @@ func main() {
 	flag.Parse()
 
 	var conn *grpc.ClientConn
-	if *tls {
+	if *useTLS {
 		pool, err := x509.SystemCertPool()
 		creds := credentials.NewClientTLSFromCert(pool, "")
 		conn, err = grpc.Dial(*serverAddr, grpc.WithTransportCredentials(creds))

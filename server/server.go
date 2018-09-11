@@ -36,12 +36,14 @@ func preparePings(batch influxdb.BatchPoints, pings []*pb.Ping) {
 		tags := map[string]string{
 			"location": ping.Location,
 			"endpoint": strconv.FormatInt(int64(ping.Endpoint), 10),
-			"timedOut": strconv.FormatBool(ping.TimedOut),
 		}
 		fields := map[string]interface{}{
-			"requestTime":    ping.RequestDuration,
-			"connectionTime": ping.ConnectionDuration,
-			"status":         ping.OnlineStatus,
+			"dnsLookup":        ping.DnsLookupDuration,
+			"tcpConnection":    ping.TcpConnectionDuration,
+			"tlsHandshake":     ping.TlsHandshakeDuration,
+			"serverProcessing": ping.ServerProcessingDuration,
+			"contentTransfer":  ping.ContentTransferDuration,
+			"status":           ping.Online,
 		}
 		pt, _ := influxdb.NewPoint("ping", tags, fields, time.Now())
 		batch.AddPoint(pt)
@@ -75,7 +77,7 @@ func (h *healthSignalServer) startSink() {
 }
 
 func (h *healthSignalServer) getpoints(endpoint int) (res []influxdb.Result, err error) {
-	qs := fmt.Sprintf("SELECT mean(\"requestTime\"), mean(\"connectionTime\"), last(\"status\") FROM ping WHERE (\"endpoint\"='%d') AND time >= now() - 6h GROUP BY time(30s),location fill(none)", endpoint)
+	qs := fmt.Sprintf("SELECT mean(\"dnsLookup\"), mean(\"tcpConnection\"), mean(\"tlsHandshake\"), mean(\"serverProcessing\"), mean(\"contentTransfer\"), last(\"status\") FROM ping WHERE (\"endpoint\"='%d') AND time >= now() - 6h GROUP BY time(30s),location fill(none)", endpoint)
 	q := influxdb.NewQuery(qs, "pings", "ms")
 	if response, err := h.influxClient.Query(q); err == nil {
 		if response.Error() != nil {
@@ -89,21 +91,26 @@ func (h *healthSignalServer) getpoints(endpoint int) (res []influxdb.Result, err
 }
 
 type point struct {
-	Timestamp      int64       `json:"timestamp"`
-	ConnectionTime json.Number `json:"connectionTime"`
-	RequestTime    json.Number `json:"requestTime"`
-	Status         json.Number `json:"status"`
-	Location       string      `json:"location"`
+	Timestamp        int64       `json:"timestamp"`
+	DNSLookup        json.Number `json:"dnsLookup"`
+	TCPConnection    json.Number `json:"tcpConnection"`
+	TLSHandshake     json.Number `json:"tlsHandshake"`
+	ServerProcessing json.Number `json:"serverProcessing"`
+	ContentTransfer  json.Number `json:"contentTransfer"`
+	Status           bool        `json:"status"`
+	Location         string      `json:"location"`
 }
 
 func (h *healthSignalServer) query(rw http.ResponseWriter, req *http.Request) {
 	endpoint := chi.URLParam(req, "endpointID")
 	if endpoint == "" {
+		log.Printf("Endpoint is required: %v", endpoint)
 		http.Error(rw, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
 	endpointID, err := strconv.Atoi(endpoint)
 	if err != nil {
+		log.Printf("Endpoint is not a vaild number: %v", endpoint)
 		http.Error(rw, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
@@ -121,10 +128,13 @@ func (h *healthSignalServer) query(rw http.ResponseWriter, req *http.Request) {
 					if timeMs, err := timestamp.Int64(); err == nil {
 						ts := time.Unix(0, timeMs*int64(time.Millisecond))
 						point := point{
-							Timestamp:      ts.Unix(),
-							ConnectionTime: raw[1].(json.Number),
-							RequestTime:    raw[2].(json.Number),
-							Status:         raw[3].(json.Number),
+							Timestamp:        ts.Unix(),
+							DNSLookup:        raw[1].(json.Number),
+							TCPConnection:    raw[2].(json.Number),
+							TLSHandshake:     raw[3].(json.Number),
+							ServerProcessing: raw[4].(json.Number),
+							ContentTransfer:  raw[5].(json.Number),
+							Status:           raw[6].(bool),
 						}
 						if location, ok := series.Tags["location"]; ok {
 							point.Location = location
@@ -135,13 +145,13 @@ func (h *healthSignalServer) query(rw http.ResponseWriter, req *http.Request) {
 			}
 		}
 	}
-	rw.Header().Add("Content-Type", "application/json")
 	b, err := json.Marshal(points)
 	if err != nil {
 		log.Println(err)
 		http.Error(rw, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
+	rw.Header().Add("Content-Type", "application/json")
 	rw.Write(b)
 }
 
@@ -209,7 +219,9 @@ func (h *healthSignalServer) listEndpoints() ([]*pb.Endpoint, error) {
 	}
 	var endpoints []*pb.Endpoint
 	for rows.Next() {
-		endpoint := &pb.Endpoint{}
+		endpoint := &pb.Endpoint{
+			Method: "GET",
+		}
 		err = rows.Scan(&endpoint.Id, &endpoint.Url, &endpoint.ExpectedStatus, &endpoint.Name)
 		if err != nil {
 			log.Println(err)

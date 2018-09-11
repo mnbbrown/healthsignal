@@ -21,7 +21,7 @@ class Graph extends Component {
   syncData = () => {
     const { endpoint } = this.props;
     api
-      .getEndpointData(endpoint)
+      .getEndpointData(endpoint.id)
       .then(data => {
         data = data.reduce((dataByTime, point) => {
           dataByTime[point["timestamp"]] = dataByTime[point["timestamp"]] || {};
@@ -86,7 +86,7 @@ class Graph extends Component {
     const lineStyle = new styler(
       locations.map((location, index) => {
         return {
-          key: `${location}_requestTime`,
+          key: `${location}_serverProcessing`,
           color: colors[index],
           width: 2
         };
@@ -116,7 +116,7 @@ class Graph extends Component {
                     lineStyle={lineStyle}
                     axis="response"
                     series={data}
-                    columns={locations.map(l => `${l}_requestTime`)}
+                    columns={locations.map(l => `${l}_serverProcessing`)}
                   />
                 </Charts>
               </ChartRow>

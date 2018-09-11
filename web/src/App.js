@@ -17,7 +17,7 @@ class App extends Component {
       <div className="App">
         <div className="App-container">
           {this.state.endpoints.map((d, i) => (
-            <Graph endpoint={d.id} key={i} />
+            <Graph endpoint={d} key={i} />
           ))}
         </div>
       </div>
