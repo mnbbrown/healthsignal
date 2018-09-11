@@ -12,10 +12,10 @@ jobs:
   include:
     - stage: compile
       name: "Compile Server"
-      script: cd server && make deps build_all
+      script: cd server && make build_all
     - stage: compile
       name: "Compile Client"
-      script: cd client && make deps build_all
+      script: cd client && make build_all
     - stage: deploy
       name: "Deploy"
       script: echo "Deploying"
